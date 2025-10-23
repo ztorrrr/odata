@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv run python run_server.py)",
+      "Bash(rm:*)",
+      "Bash(uv run python:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
