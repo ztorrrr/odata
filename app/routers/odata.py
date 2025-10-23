@@ -5,6 +5,7 @@ import logging
 from typing import Optional
 from datetime import datetime
 from io import StringIO, BytesIO
+from pathlib import Path
 from fastapi import APIRouter, Query, Request, Response, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
 import pandas as pd
@@ -19,6 +20,7 @@ import os
 from app.services.bigquery_service import get_bigquery_service
 from app.services.odata_metadata import ODataMetadataGenerator
 from app.services.odata_query_parser import ODataQueryParser
+from app.services.excel_connection_modifier import ExcelConnectionModifier
 from app.utils.setting import get_config
 
 logger = logging.getLogger(__name__)
@@ -768,6 +770,99 @@ async def get_excel_with_live_connection(
 
     except Exception as e:
         logger.error(f"Error requesting Excel with live connection: {str(e)}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {
+                    "code": "InternalServerError",
+                    "message": str(e)
+                }
+            }
+        )
+
+
+@router.get(f"/{config.BIGQUERY_TABLE_NAME}/excel-template")
+async def get_excel_from_template(
+    request: Request,
+    filter: Optional[str] = Query(None, alias="$filter", description="OData filter expression"),
+    select: Optional[str] = Query(None, alias="$select", description="Comma-separated list of properties"),
+    orderby: Optional[str] = Query(None, alias="$orderby", description="Order by expression"),
+):
+    """
+    템플릿 Excel 파일의 OData 연결 수정하여 제공
+
+    템플릿 파일(app/template/odata_template.xlsx)의 Power Query 연결 정보를
+    요청된 엔드포인트로 변경하여 제공합니다.
+
+    특징:
+    - 데이터를 시트에 포함하지 않음 (연결 정보만 저장)
+    - 대용량 데이터도 처리 가능
+    - 사용자는 파일 다운로드 후 Excel에서 '데이터 새로고침'만 하면 됨
+    - 필터/선택/정렬 조건이 연결에 포함됨
+
+    지원하는 파라미터:
+    - $filter: 필터 조건 (예: Media eq 'Naver')
+    - $select: 선택할 필드 (예: Date,Campaign,Clicks)
+    - $orderby: 정렬 조건 (예: Date desc)
+    """
+    try:
+        logger.info(f"Excel template requested: filter={filter}, select={select}, orderby={orderby}")
+
+        # 템플릿 파일 경로
+        template_path = Path(__file__).parent.parent / "template" / "odata_template.xlsx"
+
+        if not template_path.exists():
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "Template file not found",
+                    "message": f"Template file does not exist: {template_path}",
+                    "path": str(template_path)
+                }
+            )
+
+        # OData URL 구성
+        base_url = str(request.base_url).rstrip('/')
+        odata_url = f"{base_url}/odata/{config.BIGQUERY_TABLE_NAME}"
+
+        query_params = []
+        if filter:
+            query_params.append(f"$filter={filter}")
+        if select:
+            query_params.append(f"$select={select}")
+        if orderby:
+            query_params.append(f"$orderby={orderby}")
+
+        if query_params:
+            odata_url += "?" + "&".join(query_params)
+
+        logger.info(f"Target OData URL: {odata_url}")
+
+        # Excel 연결 수정기 초기화
+        modifier = ExcelConnectionModifier(str(template_path))
+
+        # 연결 정보 수정하여 새 파일 생성
+        modified_file_path = modifier.modify_odata_connection(odata_url)
+
+        # 파일명 생성
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{config.BIGQUERY_TABLE_NAME}_connection_{timestamp}.xlsx"
+
+        logger.info(f"Generated Excel file from template: {filename}")
+
+        # FileResponse로 반환 (background에서 임시 파일 삭제)
+        return FileResponse(
+            path=modified_file_path,
+            filename=filename,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            background=lambda: os.unlink(modified_file_path)
+        )
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        logger.error(f"Error generating Excel from template: {str(e)}", exc_info=True)
         return JSONResponse(
             status_code=500,
             content={

@@ -20,20 +20,29 @@ BigQuery 데이터를 OData v4 REST API로 제공하는 서비스. Excel, Power 
 3. FastAPI 서비스가 OData v4 REST API 제공
 4. 클라이언트 도구(Excel, Power BI)가 OData protocol로 데이터 조회
 
-### Excel 연결 방식 (3가지 옵션)
+### Excel 연결 방식 (4가지 옵션)
 
-#### 1. ODC 파일 방식 (추천)
+#### 1. Excel 템플릿 연결 방식 (추천 - 신규)
+- 엔드포인트: `/odata/{table_name}/excel-template`
+- **특징**: 템플릿 파일 기반, Power Query 연결만 포함 (데이터 미포함)
+- 대용량 데이터 처리 최적화 (~수십 KB 파일 크기)
+- 다운로드 후 Excel에서 "데이터 새로고침"만 하면 됨
+- 필터/선택/정렬 조건이 연결에 포함되어 반복 사용 가능
+- 사용 예: `curl "http://localhost:8888/odata/musinsa_data/excel-template?$filter=Media eq 'Naver'" -o data.xlsx`
+
+#### 2. ODC 파일 방식
 - 엔드포인트: `/odata/{table_name}/connection`
 - 경량 파일 (~1KB) 다운로드 후 더블클릭
 - Excel에서 OData 연결 자동 생성
 - 크로스 플랫폼 (macOS/Linux 서버에서도 생성 가능)
 
-#### 2. Excel 템플릿 방식
+#### 3. Excel 가이드 템플릿 방식
 - 엔드포인트: `/odata/{table_name}/template`
 - 사용 방법 안내 + Power Query M 코드 + 샘플 데이터 포함
 - Excel 파일 다운로드 후 안내에 따라 연결 설정
+- 초보자를 위한 상세 가이드 제공
 
-#### 3. Windows COM 방식 (선택사항)
+#### 4. Windows COM 방식 (선택사항)
 - 엔드포인트: `/odata/{table_name}/excel-live`
 - 별도 Windows 서버 필요 (Windows Excel Service)
 - Power Query가 내장된 실제 Excel 파일 생성
@@ -56,7 +65,8 @@ BigQuery 데이터를 OData v4 REST API로 제공하는 서비스. Excel, Power 
 - `/odata/{table_name}/$count` - 개수만 반환하는 endpoint
 - `/odata/{table_name}/export` - CSV 파일 다운로드 endpoint
 - `/odata/{table_name}/connection` - ODC (Office Data Connection) 파일 생성
-- `/odata/{table_name}/template` - Excel 템플릿 파일 (사용 방법 안내 + Power Query M 코드 + 샘플 데이터)
+- `/odata/{table_name}/template` - Excel 가이드 템플릿 파일 (사용 방법 안내 + Power Query M 코드 + 샘플 데이터)
+- `/odata/{table_name}/excel-template` - **[신규]** 템플릿 기반 Excel 파일 (Power Query 연결만 포함, 데이터 미포함, 대용량 처리 최적화)
 - `/odata/{table_name}/excel-live` - Windows Excel Service를 통한 실시간 OData 연결 Excel 파일 생성 (선택사항)
 
 **app/services/bigquery_service.py**: BigQuery 작업 처리
@@ -86,6 +96,13 @@ BigQuery 데이터를 OData v4 REST API로 제공하는 서비스. Excel, Power 
 - BigQuery dataset 자동 생성 (필요 시)
 - 컬럼명 정제 및 STRING schema로 로드 (타입 오류 방지)
 - 로드 완료 후 테이블 정보 및 샘플 데이터 출력
+
+**app/services/excel_connection_modifier.py**: **[신규]** Excel 연결 수정 서비스
+- Excel 파일(.xlsx)의 Power Query 연결 정보를 동적으로 수정
+- Excel 파일을 ZIP으로 압축 해제 → XML 수정 → 재압축
+- 수정 대상: `xl/connections.xml`, `xl/queries/*.xml`, `customXml/*.xml`
+- 템플릿 파일(`app/template/odata_template.xlsx`)의 OData URL을 요청된 엔드포인트로 변경
+- 대용량 데이터 처리에 최적화 (데이터 미포함, 연결 정보만 저장)
 
 **app/utils/gcp_auth.py**: GCP 인증
 - `get_gcp_auth()`로 singleton 인스턴스 접근
@@ -134,6 +151,31 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8888 --reload
 - Data: `http://localhost:8888/odata/musinsa_data`
 - Health: `http://localhost:8888/odata/health`
 - CSV Export: `http://localhost:8888/odata/musinsa_data/export`
+- **Excel Template (신규)**: `http://localhost:8888/odata/musinsa_data/excel-template`
+
+### Excel 템플릿 연결 사용 예제 (신규 기능)
+```bash
+# 기본 사용
+curl "http://localhost:8888/odata/musinsa_data/excel-template" -o data.xlsx
+
+# 필터 적용 (Media가 'Naver'인 데이터만)
+curl "http://localhost:8888/odata/musinsa_data/excel-template?\$filter=Media%20eq%20'Naver'" -o naver_data.xlsx
+
+# 특정 필드만 선택
+curl "http://localhost:8888/odata/musinsa_data/excel-template?\$select=Date,Campaign,Clicks" -o selected_fields.xlsx
+
+# 정렬 조건 적용
+curl "http://localhost:8888/odata/musinsa_data/excel-template?\$orderby=Date%20desc" -o sorted_data.xlsx
+
+# 조합 사용
+curl "http://localhost:8888/odata/musinsa_data/excel-template?\$filter=Media%20eq%20'Naver'&\$select=Date,Campaign&\$orderby=Date%20desc" -o filtered_sorted.xlsx
+```
+
+브라우저에서 직접 접속하여 다운로드:
+```
+http://localhost:8888/odata/musinsa_data/excel-template
+http://localhost:8888/odata/musinsa_data/excel-template?$filter=Media eq 'Naver'
+```
 
 ### 환경 설정
 `.env.example`을 `.env`로 복사 후 설정:
@@ -169,6 +211,23 @@ BigQuery는 엄격한 컬럼 명명 규칙을 적용함. `bigquery_service.py:50
 - 파일명 자동 생성: `{table_name}_{timestamp}.csv` 형식
 - 기본 최대 행 수: 100,000 (최대 1,000,000까지 설정 가능)
 - 사용 예: `curl "http://localhost:8888/odata/musinsa_data/export?$filter=Media eq 'Naver'&$top=1000" -o data.csv`
+
+### Excel 템플릿 연결 수정 (신규)
+`/odata/{table_name}/excel-template` endpoint를 통해 템플릿 기반 Excel 파일 생성:
+- **동작 원리**: Excel 파일(.xlsx)은 ZIP 압축된 XML 파일들의 모음
+  1. 템플릿 파일(`app/template/odata_template.xlsx`)을 ZIP으로 압축 해제
+  2. Power Query 연결 정보가 담긴 XML 파일들 수정
+     - `xl/connections.xml`: 연결 문자열의 Location URL
+     - `xl/queries/*.xml`: Power Query M 코드의 OData.Feed URL
+     - `customXml/*.xml`: 커스텀 연결 정보 (있는 경우)
+  3. 수정된 파일들을 다시 ZIP으로 압축하여 .xlsx 생성
+- **장점**:
+  - 데이터를 파일에 포함하지 않아 파일 크기 최소화 (~수십 KB)
+  - 대용량 데이터 처리 가능 (Excel에서 필요한 만큼만 로드)
+  - 필터/선택/정렬 조건이 연결에 포함되어 반복 사용 가능
+  - 사용자는 다운로드 후 Excel에서 "데이터 새로고침"만 하면 됨
+- 파일명 자동 생성: `{table_name}_connection_{timestamp}.xlsx` 형식
+- 임시 파일은 자동으로 삭제됨 (FileResponse background 처리)
 
 ## 프로젝트 의존성
 
