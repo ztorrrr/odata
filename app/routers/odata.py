@@ -1334,3 +1334,50 @@ async def get_excel_with_ready_connection(
                 }
             }
         )
+
+
+@router.get(f"/{config.BIGQUERY_TABLE_NAME}/json-sample")
+async def get_sample_data_as_json():
+    """
+    샘플 데이터를 JSON으로 반환 (템플릿 생성용)
+
+    ✅ 템플릿 Excel 파일 생성 시 사용할 샘플 데이터 제공
+    - 고정된 10개 행만 반환
+    - 필터/정렬 없이 단순 조회
+    - Excel 템플릿의 Power Query 연결 테스트용
+    """
+    try:
+        bq_service = get_bigquery_service()
+
+        logger.info("Sample JSON API request (10 rows)")
+
+        # 샘플 데이터 조회 (상위 10개)
+        rows = bq_service.query_table(
+            select=None,
+            filter=None,
+            orderby=None,
+            top=10,
+            skip=None
+        )
+
+        # OData v4 형식 응답
+        response_data = {
+            "@odata.context": f"$metadata#{config.BIGQUERY_TABLE_NAME}",
+            "value": rows
+        }
+
+        logger.info(f"Returning {len(rows)} sample rows as JSON")
+
+        return JSONResponse(content=response_data)
+
+    except Exception as e:
+        logger.error(f"Error querying sample data as JSON: {str(e)}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {
+                    "code": "InternalServerError",
+                    "message": str(e)
+                }
+            }
+        )
