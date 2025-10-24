@@ -1,6 +1,6 @@
 # OData v4 Service for BigQuery
 
-BigQuery 데이터를 OData v4 REST API로 제공하는 서비스입니다.
+BigQuery 데이터를 OData v4 REST API로 제공하는 서비스.
 
 ## 주요 기능
 
@@ -20,7 +20,7 @@ uv sync
 
 ### 2. 환경 설정
 
-`.env` 파일을 생성하고 다음 내용을 입력:
+`.env` 파일을 생성하고 다음 내용 입력:
 
 ```env
 ENVIRONMENT=DEV
@@ -58,7 +58,7 @@ uv run python main.py
 - `GET /odata/{table_name}` - 데이터 조회
 - `GET /odata/{table_name}/$count` - 레코드 개수
 
-### 쿼리 옵션
+### 쿼리 예시
 
 ```bash
 # 필터링
@@ -84,7 +84,7 @@ curl "http://localhost:8888/odata/musinsa_data?\$count=true"
 
 ## Excel 연결
 
-### Windows COM 방식 (추천)
+### Windows COM 방식
 
 ```bash
 curl "http://localhost:8888/odata/musinsa_data/excel-com" -o data.xlsx
@@ -95,30 +95,6 @@ curl "http://localhost:8888/odata/musinsa_data/excel-com" -o data.xlsx
 2. 데이터 탭 → 모두 새로고침 클릭
 3. 실시간 데이터 로드
 
-### 직접 연결
-
-Excel에서:
-1. 데이터 탭 → 데이터 가져오기 → OData 피드
-2. URL 입력: `http://localhost:8888/odata/musinsa_data`
-3. 확인
-
-## 캐싱 문제 해결
-
-이 프로젝트는 FastAPI/uvicorn의 캐싱 문제를 방지하기 위해 다음 기능을 포함합니다:
-
-### 자동 캐시 정리
-- 서버 시작 시 `__pycache__` 디렉토리 자동 삭제
-- `PYTHONDONTWRITEBYTECODE=1` 환경 변수 자동 설정
-- 바이트코드 생성 비활성화
-
-### 빠른 리로드
-- 개발 모드에서 0.25초 리로드 지연
-- `app/` 디렉토리만 감시하여 불필요한 리로드 방지
-
-### 수동 캐시 정리 (필요 시)
-```bash
-find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null
-```
 
 ## 프로젝트 구조
 
@@ -141,30 +117,7 @@ odata/
 └── CLAUDE.md                        # 개발 가이드
 ```
 
-## 트러블슈팅
-
-### BigQuery 테이블 없음
-```bash
-uv run python -m app.services.data_loader
-```
-
-### GCP 인증 실패
-AWS Secret Manager의 `{environment}/gen-ai/google/auth`에 service account key 확인
-
-### 서버가 변경사항을 반영하지 않음
-서버가 자동으로 캐시를 정리하지만, 문제가 지속되면:
-```bash
-# 서버 종료
-Ctrl+C
-
-# 캐시 수동 삭제
-find . -type d -name "__pycache__" -exec rm -rf {} +
-
-# 서버 재시작
-uv run python main.py
-```
-
-## 기술 스택
+## 사용 인프라
 
 - **FastAPI**: 웹 프레임워크
 - **uvicorn**: ASGI 서버
@@ -173,7 +126,3 @@ uv run python main.py
 - **pywin32**: Windows COM 자동화
 - **pandas**: 데이터 처리
 - **lxml**: XML 메타데이터 생성
-
-## 라이센스
-
-이 프로젝트는 내부 사용을 위한 것입니다.
