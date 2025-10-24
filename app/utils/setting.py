@@ -48,14 +48,14 @@ class ProductionConfig(BaseConfig):
 class DevelopmentConfig(BaseConfig):
     DOCS_URL: str = "/docs"
     REDOC_URL: str = "/redoc"
-    LOG_LEVEL: str = "DEBUG"
+    LOG_LEVEL: str = "INFO"
 
 
 @dataclass
 class TestConfig(BaseConfig):
     DOCS_URL: str = "/docs"
     REDOC_URL: str = "/redoc"
-    LOG_LEVEL: str = "DEBUG"
+    LOG_LEVEL: str = "INFO"
 
 
 @cache

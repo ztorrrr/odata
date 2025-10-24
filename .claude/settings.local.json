@@ -9,7 +9,14 @@
       "Bash(wget:*)",
       "Bash(unzip:*)",
       "Bash(curl:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(python -m json.tool:*)",
+      "Bash(taskkill:*)",
+      "Bash(uv pip install:*)",
+      "Bash(timeout /t 3)",
+      "Bash(python:*)",
+      "Bash(powershell \"Get-Item app\\routers\\odata.py | Select-Object LastWriteTime, Length\")",
+      "Bash(find:*)"
     ],
     "deny": [],
     "ask": []

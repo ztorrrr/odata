@@ -1,10 +1,16 @@
 # Python-generated files
 __pycache__/
 *.py[oc]
+*.pyc
+*.pyo
+*.pyd
+.Python
 build/
 dist/
 wheels/
 *.egg-info
+*.egg
+.eggs/
 
 # Virtual environments
 .venv
@@ -34,6 +40,8 @@ logs/
 *.tmp
 temp/
 tmp/
+test*.xlsx
+test*.csv
 
 # GCP credentials
 *-key.json

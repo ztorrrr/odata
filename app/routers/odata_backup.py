@@ -250,30 +250,6 @@ async def health_check():
         )
 
 
-@router.get("/debug/routes")
-async def debug_routes():
-    """디버그: 등록된 모든 라우트 확인"""
-    import sys
-    routes_info = []
-
-    # 현재 모듈 파일 경로
-    module_file = sys.modules[__name__].__file__
-
-    # 이 라우터의 모든 라우트
-    for route in router.routes:
-        if hasattr(route, 'path'):
-            routes_info.append({
-                "path": route.path,
-                "methods": list(route.methods) if hasattr(route, 'methods') else []
-            })
-
-    return {
-        "module_file": module_file,
-        "total_routes": len(routes_info),
-        "routes": routes_info
-    }
-
-
 @router.get(f"/{config.BIGQUERY_TABLE_NAME}/export")
 async def export_to_csv(
     filter: Optional[str] = Query(None, alias="$filter", description="OData filter expression"),

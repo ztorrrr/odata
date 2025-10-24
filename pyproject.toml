@@ -21,3 +21,9 @@ dependencies = [
     "python-multipart>=0.0.20",
     "uvicorn>=0.38.0",
 ]
+
+[tool.uv]
+compile-bytecode = false
+
+[tool.setuptools]
+zip-safe = false
