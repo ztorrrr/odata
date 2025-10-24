@@ -24,6 +24,7 @@ from app.services.excel_connection_modifier import ExcelConnectionModifier
 from app.services.excel_template_generator import ExcelTemplateGenerator
 from app.services.excel_with_connection import ExcelWithConnectionGenerator
 from app.services.web_query_excel_generator import WebQueryExcelGenerator
+from app.services.excel_with_pq_generator import ExcelWithPowerQueryGenerator
 from app.utils.setting import get_config
 
 logger = logging.getLogger(__name__)
@@ -1233,6 +1234,97 @@ async def get_web_query_excel(
 
     except Exception as e:
         logger.error(f"Error generating web query Excel: {str(e)}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {
+                    "code": "InternalServerError",
+                    "message": str(e)
+                }
+            }
+        )
+
+
+@router.get(f"/{config.BIGQUERY_TABLE_NAME}/excel-ready")
+async def get_excel_with_ready_connection(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    filter: Optional[str] = Query(None, alias="$filter", description="OData filter expression"),
+    select: Optional[str] = Query(None, alias="$select", description="Comma-separated list of properties"),
+    orderby: Optional[str] = Query(None, alias="$orderby", description="Order by expression"),
+    top: Optional[int] = Query(10000, alias="$top", description="Maximum number of rows", le=100000),
+):
+    """
+    Power Query 연결이 이미 설정된 Excel 파일 생성 ⭐ 권장
+
+    ✅ 이 엔드포인트는 연결이 완전히 설정된 Excel 파일을 제공합니다:
+    - Power Query 연결이 "쿼리 및 연결"에 표시됨
+    - 시트에 데이터 없음 (연결 정보만)
+    - 사용자가 "새로고침" 또는 "로드 대상"으로 데이터 로드
+    - 간단한 DataMashup 사용 (OData 손상 문제 없음)
+    - JSON API 사용 (안정적)
+
+    사용자 워크플로우:
+    1. 파일 다운로드
+    2. Excel에서 파일 열기
+    3. 데이터 탭 → "쿼리 및 연결"에서 쿼리 확인
+    4. 쿼리 → "로드 대상..." 또는 "모두 새로고침" 클릭
+    5. 데이터 로드 완료
+
+    지원하는 파라미터:
+    - $filter: 필터 조건
+    - $select: 선택할 필드
+    - $orderby: 정렬 조건
+    - $top: 최대 행 수 (기본: 10000, 최대: 100000)
+    """
+    try:
+        logger.info(f"Excel with ready connection requested: filter={filter}, select={select}, top={top}")
+
+        # JSON API URL 구성
+        base_url = str(request.base_url).rstrip('/')
+        json_api_url = f"{base_url}/odata/{config.BIGQUERY_TABLE_NAME}/json"
+
+        # 쿼리 파라미터 추가
+        query_params = []
+        if filter:
+            query_params.append(f"$filter={filter}")
+        if select:
+            query_params.append(f"$select={select}")
+        if orderby:
+            query_params.append(f"$orderby={orderby}")
+        if top:
+            query_params.append(f"$top={top}")
+
+        if query_params:
+            json_api_url += "?" + "&".join(query_params)
+
+        # Excel 생성기 초기화
+        generator = ExcelWithPowerQueryGenerator()
+
+        # Power Query 연결이 설정된 Excel 파일 생성
+        output_path = generator.generate_excel_with_power_query(
+            json_api_url=json_api_url,
+            table_name=config.BIGQUERY_TABLE_NAME,
+            query_name=config.BIGQUERY_TABLE_NAME
+        )
+
+        # 파일명 생성
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{config.BIGQUERY_TABLE_NAME}_ready_{timestamp}.xlsx"
+
+        logger.info(f"Generated Excel with ready connection: {filename}")
+
+        # 임시 파일 삭제 작업 추가
+        background_tasks.add_task(os.unlink, output_path)
+
+        return FileResponse(
+            path=output_path,
+            filename=filename,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+    except Exception as e:
+        logger.error(f"Error generating Excel with ready connection: {str(e)}", exc_info=True)
         return JSONResponse(
             status_code=500,
             content={
