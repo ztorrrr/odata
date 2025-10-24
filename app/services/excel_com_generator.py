@@ -217,18 +217,18 @@ in
 
     def _add_minimal_connection(self, worksheet, odata_url: str, table_name: str):
         """
-        최소한의 연결 정보 추가 (수동 새로고침 필요)
+        연결 정보 추가 및 가이드
         """
         try:
             # 안내 텍스트 추가
-            worksheet.Range("A1").Value = "OData Connection Information"
+            worksheet.Range("A1").Value = "OData 데이터 템플릿"
             worksheet.Range("A2").Value = "URL:"
             worksheet.Range("B2").Value = odata_url
-            worksheet.Range("A4").Value = "Instructions:"
-            worksheet.Range("A5").Value = "1. Go to Data tab"
-            worksheet.Range("A6").Value = "2. Click 'Get Data' > 'From Other Sources' > 'From OData Feed'"
-            worksheet.Range("A7").Value = "3. Paste the URL above"
-            worksheet.Range("A8").Value = "4. Click OK to load data"
+            worksheet.Range("A4").Value = "사용 방법:"
+            worksheet.Range("A5").Value = "1. 상단 '데이터' 탭 클릭"
+            worksheet.Range("A6").Value = "2. '쿼리 및 연결' 클릭"
+            worksheet.Range("A7").Value = "3. 우측 사이드바에서 템플릿 이름의 쿼리를 우클릭하여 '다음으로 로드'"
+            worksheet.Range("A8").Value = "4. '연결만 만들기' 및 '데이터 모델에 이 데이터 추가' 선택 후 '확인'"
 
             # 서식 설정
             worksheet.Range("A1").Font.Bold = True
