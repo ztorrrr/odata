@@ -6,7 +6,7 @@ from typing import Optional
 from datetime import datetime
 from io import StringIO, BytesIO
 from pathlib import Path
-from fastapi import APIRouter, Query, Request, Response, HTTPException
+from fastapi import APIRouter, Query, Request, Response, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
 import pandas as pd
 from openpyxl import Workbook
@@ -21,6 +21,9 @@ from app.services.bigquery_service import get_bigquery_service
 from app.services.odata_metadata import ODataMetadataGenerator
 from app.services.odata_query_parser import ODataQueryParser
 from app.services.excel_connection_modifier import ExcelConnectionModifier
+from app.services.excel_template_generator import ExcelTemplateGenerator
+from app.services.excel_with_connection import ExcelWithConnectionGenerator
+from app.services.web_query_excel_generator import WebQueryExcelGenerator
 from app.utils.setting import get_config
 
 logger = logging.getLogger(__name__)
@@ -373,38 +376,56 @@ async def get_odc_connection(
         if query_params:
             odata_url += "?" + "&".join(query_params)
 
-        # ODC XML 생성 (Office Data Connection 표준 형식)
-        odc_content = f"""<?xml version="1.0" encoding="UTF-8"?>
-<html xmlns:o="urn:schemas-microsoft-com:office:office"
-      xmlns="http://www.w3.org/TR/REC-html40">
+        # Power Query M 코드 생성
+        m_code = f"""let
+    원본 = OData.Feed("{odata_url}", null, [Implementation="2.0"])
+in
+    원본"""
+
+        # ODC XML 생성 (Power Query 방식)
+        # 핵심: 원본 구조 유지하되 HTML body를 최소화하여 자동 실행 방지
+        # ODCDataSource 클래스와 JavaScript init()가 자동 실행의 주요 트리거
+        odc_content = f"""<html xmlns:o="urn:schemas-microsoft-com:office:office"
+xmlns="http://www.w3.org/TR/REC-html40">
+
 <head>
-<meta http-equiv="Content-Type" content="text/x-ms-odc; charset=utf-8">
-<meta name="ProgId" content="ODC.Feed">
-<meta name="SourceType" content="OData Feed">
-<xml id="docprops">
-  <o:DocumentProperties xmlns:o="urn:schemas-microsoft-com:office:office">
-    <o:Name>{config.BIGQUERY_TABLE_NAME} OData Connection</o:Name>
-    <o:Description>OData v4 connection to BigQuery {config.BIGQUERY_TABLE_NAME} table</o:Description>
-  </o:DocumentProperties>
-</xml>
-<xml id="msodc">
-  <odc:OfficeDataConnection
-    xmlns:odc="urn:schemas-microsoft-com:office:odc"
-    xmlns="http://www.w3.org/TR/REC-html40">
-    <odc:Connection odc:Type="OLEDB">
-      <odc:ConnectionString>
-        Provider=Microsoft.Mashup.OleDb.1;Data Source=$Workbook$;Location={odata_url}
-      </odc:ConnectionString>
-      <odc:CommandType>Default</odc:CommandType>
-      <odc:CommandText>{config.BIGQUERY_TABLE_NAME}</odc:CommandText>
-    </odc:Connection>
-  </odc:OfficeDataConnection>
+<meta http-equiv=Content-Type content="text/x-ms-odc; charset=utf-8">
+<meta name=ProgId content=ODC.Database>
+<meta name=SourceType content=OLEDB>
+<title>쿼리 - {config.BIGQUERY_TABLE_NAME}</title>
+<xml id=docprops><o:DocumentProperties
+  xmlns:o="urn:schemas-microsoft-com:office:office"
+  xmlns="http://www.w3.org/TR/REC-html40">
+  <o:Description>OData 연결: {config.BIGQUERY_TABLE_NAME}. 쿼리 및 연결에서 수동으로 로드하세요.</o:Description>
+  <o:Name>쿼리 - {config.BIGQUERY_TABLE_NAME}</o:Name>
+ </o:DocumentProperties>
+</xml><xml id=msodc><odc:OfficeDataConnection
+  xmlns:odc="urn:schemas-microsoft-com:office:odc"
+  xmlns="http://www.w3.org/TR/REC-html40">
+  <odc:PowerQueryConnection odc:Type="OLEDB">
+   <odc:ConnectionString>Provider=Microsoft.Mashup.OleDb.1;Data Source=$Workbook$;Location={config.BIGQUERY_TABLE_NAME};Extended Properties=</odc:ConnectionString>
+   <odc:CommandType>TableCollection</odc:CommandType>
+   <odc:CommandText>&quot;{config.BIGQUERY_TABLE_NAME}&quot;</odc:CommandText>
+  </odc:PowerQueryConnection>
+  <odc:PowerQueryMashupData>&lt;Mashup xmlns:xsd=&quot;http://www.w3.org/2001/XMLSchema&quot; xmlns:xsi=&quot;http://www.w3.org/2001/XMLSchema-instance&quot; xmlns=&quot;http://schemas.microsoft.com/DataMashup&quot;&gt;&lt;Client&gt;EXCEL&lt;/Client&gt;&lt;Version&gt;2.147.503.0&lt;/Version&gt;&lt;MinVersion&gt;2.21.0.0&lt;/MinVersion&gt;&lt;Culture&gt;ko-KR&lt;/Culture&gt;&lt;SafeCombine&gt;true&lt;/SafeCombine&gt;&lt;Items&gt;&lt;Query Name=&quot;{config.BIGQUERY_TABLE_NAME}&quot;&gt;&lt;Formula&gt;&lt;![CDATA[{m_code}]]&gt;&lt;/Formula&gt;&lt;IsParameterQuery xsi:nil=&quot;true&quot; /&gt;&lt;IsDirectQuery xsi:nil=&quot;true&quot; /&gt;&lt;/Query&gt;&lt;/Items&gt;&lt;/Mashup&gt;</odc:PowerQueryMashupData>
+ </odc:OfficeDataConnection>
 </xml>
 </head>
+
 <body>
-<p>OData Connection File for {config.BIGQUERY_TABLE_NAME}</p>
-<p>URL: {odata_url}</p>
+<p style="font-family: Arial; font-size: 12px; padding: 20px;">
+<strong>OData 연결 정보</strong><br/>
+테이블: {config.BIGQUERY_TABLE_NAME}<br/>
+URL: {odata_url}<br/><br/>
+<strong>데이터 로드 방법:</strong><br/>
+1. Excel의 '데이터' 탭을 클릭하세요<br/>
+2. '쿼리 및 연결'을 클릭하세요<br/>
+3. '{config.BIGQUERY_TABLE_NAME}' 쿼리를 마우스 오른쪽 클릭하세요<br/>
+4. '로드 대상...'을 선택하세요<br/>
+5. 원하는 위치를 선택하고 '로드'를 클릭하세요
+</p>
 </body>
+
 </html>"""
 
         filename = f"{config.BIGQUERY_TABLE_NAME}_connection.odc"
@@ -784,6 +805,7 @@ async def get_excel_with_live_connection(
 @router.get(f"/{config.BIGQUERY_TABLE_NAME}/excel-template")
 async def get_excel_from_template(
     request: Request,
+    background_tasks: BackgroundTasks,
     filter: Optional[str] = Query(None, alias="$filter", description="OData filter expression"),
     select: Optional[str] = Query(None, alias="$select", description="Comma-separated list of properties"),
     orderby: Optional[str] = Query(None, alias="$orderby", description="Order by expression"),
@@ -850,12 +872,14 @@ async def get_excel_from_template(
 
         logger.info(f"Generated Excel file from template: {filename}")
 
-        # FileResponse로 반환 (background에서 임시 파일 삭제)
+        # 임시 파일 삭제 작업을 background task로 추가
+        background_tasks.add_task(os.unlink, modified_file_path)
+
+        # FileResponse로 반환
         return FileResponse(
             path=modified_file_path,
             filename=filename,
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            background=lambda: os.unlink(modified_file_path)
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
     except HTTPException:
@@ -863,6 +887,352 @@ async def get_excel_from_template(
 
     except Exception as e:
         logger.error(f"Error generating Excel from template: {str(e)}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {
+                    "code": "InternalServerError",
+                    "message": str(e)
+                }
+            }
+        )
+
+
+@router.get(f"/{config.BIGQUERY_TABLE_NAME}/simple-excel")
+async def get_simple_excel_template(
+    request: Request,
+    background_tasks: BackgroundTasks,
+):
+    """
+    단순한 Excel 템플릿 제공 (Power Query 없이)
+
+    OData 연결 방법을 안내하는 단순한 Excel 파일을 제공합니다.
+    사용자가 수동으로 연결을 설정할 수 있도록 안내합니다.
+    """
+    try:
+        # OData URL 구성
+        base_url = str(request.base_url).rstrip("/")
+        odata_url = f"{base_url}/odata/{config.BIGQUERY_TABLE_NAME}"
+
+        # Excel 생성기 초기화
+        generator = ExcelTemplateGenerator()
+
+        # 단순 템플릿 생성
+        output_path = generator.generate_simple_template(
+            odata_url=odata_url,
+            table_name=config.BIGQUERY_TABLE_NAME
+        )
+
+        # 파일명 생성
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{config.BIGQUERY_TABLE_NAME}_simple_{timestamp}.xlsx"
+
+        # 임시 파일 삭제 작업 추가
+        background_tasks.add_task(os.unlink, output_path)
+
+        return FileResponse(
+            path=output_path,
+            filename=filename,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+    except Exception as e:
+        logger.error(f"Error generating simple Excel template: {str(e)}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {
+                    "code": "InternalServerError",
+                    "message": str(e)
+                }
+            }
+        )
+
+
+@router.get(f"/{config.BIGQUERY_TABLE_NAME}/odc")
+async def get_odc_connection_file(
+    request: Request,
+    background_tasks: BackgroundTasks,
+):
+    """
+    ODC (Office Data Connection) 파일 제공
+
+    Excel에서 직접 열 수 있는 연결 파일입니다.
+    다운로드 후 더블클릭하면 Excel이 자동으로 OData 연결을 생성합니다.
+    """
+    try:
+        # OData URL 구성
+        base_url = str(request.base_url).rstrip("/")
+        odata_url = f"{base_url}/odata/{config.BIGQUERY_TABLE_NAME}"
+
+        # Excel 생성기 초기화
+        generator = ExcelTemplateGenerator()
+
+        # ODC 파일 생성
+        output_path = generator.generate_odc_file(
+            odata_url=odata_url,
+            table_name=config.BIGQUERY_TABLE_NAME
+        )
+
+        # 파일명 생성
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{config.BIGQUERY_TABLE_NAME}_{timestamp}.odc"
+
+        # 임시 파일 삭제 작업 추가
+        background_tasks.add_task(os.unlink, output_path)
+
+        return FileResponse(
+            path=output_path,
+            filename=filename,
+            media_type="text/x-ms-odc"
+        )
+
+    except Exception as e:
+        logger.error(f"Error generating ODC file: {str(e)}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {
+                    "code": "InternalServerError",
+                    "message": str(e)
+                }
+            }
+        )
+
+
+@router.get(f"/{config.BIGQUERY_TABLE_NAME}/excel-connection")
+async def get_excel_with_connection_only(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    filter: Optional[str] = Query(None, alias="$filter", description="OData filter expression"),
+    select: Optional[str] = Query(None, alias="$select", description="Comma-separated list of properties"),
+    orderby: Optional[str] = Query(None, alias="$orderby", description="Order by expression"),
+):
+    """
+    Power Query 연결이 포함된 Excel 파일 생성 (데이터 미포함)
+
+    "쿼리 및 연결" 패널에 연결 정보만 포함된 Excel 파일을 생성합니다.
+    - 시트에는 데이터가 없고 사용 안내만 포함
+    - Power Query 연결이 설정되어 있음
+    - 사용자가 수동으로 로드하거나 새로고침 가능
+
+    지원하는 파라미터:
+    - $filter: 필터 조건
+    - $select: 선택할 필드
+    - $orderby: 정렬 조건
+    """
+    try:
+        logger.info(f"Excel with connection requested: filter={filter}, select={select}, orderby={orderby}")
+
+        # OData URL 구성
+        base_url = str(request.base_url).rstrip('/')
+        odata_url = f"{base_url}/odata/{config.BIGQUERY_TABLE_NAME}"
+
+        # 쿼리 파라미터
+        query_params = {
+            'filter': filter,
+            'select': select,
+            'orderby': orderby
+        }
+
+        # Excel 생성기 초기화
+        generator = ExcelWithConnectionGenerator()
+
+        # 연결이 포함된 Excel 파일 생성
+        output_path = generator.generate_excel_with_connection(
+            odata_url=odata_url,
+            table_name=config.BIGQUERY_TABLE_NAME,
+            query_params=query_params
+        )
+
+        # 파일명 생성
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{config.BIGQUERY_TABLE_NAME}_query_{timestamp}.xlsx"
+
+        # 임시 파일 삭제 작업 추가
+        background_tasks.add_task(os.unlink, output_path)
+
+        return FileResponse(
+            path=output_path,
+            filename=filename,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+    except Exception as e:
+        logger.error(f"Error generating Excel with connection: {str(e)}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {
+                    "code": "InternalServerError",
+                    "message": str(e)
+                }
+            }
+        )
+
+
+@router.get(f"/{config.BIGQUERY_TABLE_NAME}/json")
+async def get_data_as_json(
+    filter: Optional[str] = Query(None, alias="$filter", description="OData filter expression"),
+    select: Optional[str] = Query(None, alias="$select", description="Comma-separated list of properties"),
+    orderby: Optional[str] = Query(None, alias="$orderby", description="Order by expression"),
+    top: Optional[int] = Query(10000, alias="$top", description="Maximum number of rows", le=100000),
+    skip: Optional[int] = Query(None, alias="$skip", description="Number of rows to skip"),
+):
+    """
+    BigQuery 데이터를 JSON으로 반환 (Excel Power Query 연결용)
+
+    OData v4 형식의 JSON 응답을 반환합니다.
+    Excel Power Query에서 Web.Contents()로 직접 호출 가능합니다.
+
+    지원하는 파라미터:
+    - $filter: 필터 조건
+    - $select: 선택할 필드
+    - $orderby: 정렬 조건
+    - $top: 최대 행 수 (기본: 10000, 최대: 100000)
+    - $skip: 건너뛸 행 수
+    """
+    try:
+        bq_service = get_bigquery_service()
+        query_parser = ODataQueryParser()
+
+        logger.info(f"JSON API request: filter={filter}, select={select}, top={top}")
+
+        # OData 파라미터 파싱
+        parsed_params = query_parser.parse_all({
+            "$filter": filter,
+            "$select": select,
+            "$orderby": orderby,
+            "$top": str(top) if top else None,
+            "$skip": str(skip) if skip else None,
+            "$count": "false"
+        })
+
+        # BigQuery 쿼리 실행
+        rows = bq_service.query_table(
+            select=parsed_params["select"],
+            filter=parsed_params["filter"],
+            orderby=parsed_params["orderby"],
+            top=top,
+            skip=skip
+        )
+
+        # OData v4 형식 응답
+        response_data = {
+            "@odata.context": f"$metadata#{config.BIGQUERY_TABLE_NAME}",
+            "value": rows
+        }
+
+        # 카운트가 top과 일치하면 nextLink 추가
+        if len(rows) == top:
+            next_skip = (skip or 0) + top
+            response_data["@odata.nextLink"] = f"/{config.BIGQUERY_TABLE_NAME}/json?$skip={next_skip}&$top={top}"
+            if filter:
+                response_data["@odata.nextLink"] += f"&$filter={filter}"
+            if select:
+                response_data["@odata.nextLink"] += f"&$select={select}"
+            if orderby:
+                response_data["@odata.nextLink"] += f"&$orderby={orderby}"
+
+        logger.info(f"Returning {len(rows)} rows as JSON")
+
+        return JSONResponse(content=response_data)
+
+    except Exception as e:
+        logger.error(f"Error querying data as JSON: {str(e)}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {
+                    "code": "InternalServerError",
+                    "message": str(e)
+                }
+            }
+        )
+
+
+@router.get(f"/{config.BIGQUERY_TABLE_NAME}/web-query-excel")
+async def get_web_query_excel(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    filter: Optional[str] = Query(None, alias="$filter", description="OData filter expression"),
+    select: Optional[str] = Query(None, alias="$select", description="Comma-separated list of properties"),
+    orderby: Optional[str] = Query(None, alias="$orderby", description="Order by expression"),
+    top: Optional[int] = Query(10000, alias="$top", description="Maximum number of rows", le=100000),
+):
+    """
+    웹 JSON API 연결이 포함된 Excel 파일 생성 (데이터 미포함)
+
+    ✅ 안정적인 방법: Power Query M 코드로 JSON API 연결
+    - 시트에 데이터 없음 (연결 정보만)
+    - 사용자가 M 코드를 복사/붙여넣기하여 연결 설정
+    - 새로고침으로 최신 데이터 로드
+
+    장점:
+    - 자동 실행 없음 (사용자가 제어)
+    - 안정적이고 오류 없음
+    - 빅데이터 처리 가능
+    - OData Power Query 손상 문제 우회
+
+    지원하는 파라미터:
+    - $filter: 필터 조건
+    - $select: 선택할 필드
+    - $orderby: 정렬 조건
+    - $top: 최대 행 수 (기본: 10000)
+    """
+    try:
+        logger.info(f"Web Query Excel requested: filter={filter}, select={select}, top={top}")
+
+        # JSON API URL 구성
+        base_url = str(request.base_url).rstrip('/')
+        json_api_url = f"{base_url}/odata/{config.BIGQUERY_TABLE_NAME}/json"
+
+        # 쿼리 파라미터 추가
+        query_params = []
+        if filter:
+            query_params.append(f"$filter={filter}")
+        if select:
+            query_params.append(f"$select={select}")
+        if orderby:
+            query_params.append(f"$orderby={orderby}")
+        if top:
+            query_params.append(f"$top={top}")
+
+        if query_params:
+            json_api_url += "?" + "&".join(query_params)
+
+        # 설명 생성
+        description = f"BigQuery 테이블 '{config.BIGQUERY_TABLE_NAME}'의 JSON API 연결"
+        if filter:
+            description += f" (필터: {filter})"
+
+        # Excel 생성기 초기화
+        generator = WebQueryExcelGenerator()
+
+        # JSON 연결 Excel 파일 생성
+        output_path = generator.generate_json_connection_excel(
+            json_api_url=json_api_url,
+            table_name=config.BIGQUERY_TABLE_NAME,
+            description=description
+        )
+
+        # 파일명 생성
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{config.BIGQUERY_TABLE_NAME}_webquery_{timestamp}.xlsx"
+
+        logger.info(f"Generated web query Excel: {filename}")
+
+        # 임시 파일 삭제 작업 추가
+        background_tasks.add_task(os.unlink, output_path)
+
+        return FileResponse(
+            path=output_path,
+            filename=filename,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+    except Exception as e:
+        logger.error(f"Error generating web query Excel: {str(e)}", exc_info=True)
         return JSONResponse(
             status_code=500,
             content={

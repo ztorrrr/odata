@@ -229,6 +229,68 @@ BigQuery는 엄격한 컬럼 명명 규칙을 적용함. `bigquery_service.py:50
 - 파일명 자동 생성: `{table_name}_connection_{timestamp}.xlsx` 형식
 - 임시 파일은 자동으로 삭제됨 (FileResponse background 처리)
 
+### Excel 템플릿에서 OData URL 찾기
+Excel 템플릿 파일(`app/template/odata_template.xlsx`)에 설정된 OData URL을 확인하는 방법:
+
+```bash
+# 1. Excel 파일을 임시 디렉토리에 압축 해제
+mkdir -p /tmp/excel_template
+cd /tmp/excel_template
+unzip /path/to/odata_template.xlsx
+
+# 2. customXml/item1.xml에서 DataMashup 데이터 추출 및 디코딩
+python3 -c "
+import re, base64, zlib, struct
+
+# customXml/item1.xml 파일 읽기
+with open('customXml/item1.xml', 'rb') as f:
+    content = f.read()
+
+# UTF-16LE로 디코딩하여 DataMashup 태그 찾기
+text = content.decode('utf-16le', errors='ignore')
+match = re.search(r'<DataMashup[^>]*>([^<]+)</DataMashup>', text)
+
+if match:
+    # Base64 데이터 추출 및 디코딩
+    base64_data = match.group(1).replace(' ', '').replace('\n', '').replace('\r', '')
+    decoded = base64.b64decode(base64_data)
+
+    # Section1.m 파일 찾기 (Power Query M 코드)
+    # DataMashup 내부는 ZIP 구조이며, offset 490에서 Section1.m 시작
+    pk_offset = 490
+
+    # ZIP 항목 헤더 파싱
+    compression = struct.unpack('<H', decoded[pk_offset+8:pk_offset+10])[0]
+    compressed_size = struct.unpack('<I', decoded[pk_offset+18:pk_offset+22])[0]
+    uncompressed_size = struct.unpack('<I', decoded[pk_offset+22:pk_offset+26])[0]
+    filename_len = struct.unpack('<H', decoded[pk_offset+26:pk_offset+28])[0]
+    extra_len = struct.unpack('<H', decoded[pk_offset+28:pk_offset+30])[0]
+
+    # 압축된 데이터 추출 및 해제
+    data_start = pk_offset + 30 + filename_len + extra_len
+    compressed_data = decoded[data_start:data_start+compressed_size]
+
+    if compression == 8:  # Deflate 압축
+        decompressed = zlib.decompress(compressed_data, -15)
+        print('=== Power Query M Code (Section1.m) ===')
+        print(decompressed.decode('utf-8', errors='ignore'))
+"
+```
+
+**현재 템플릿의 OData URL**: `http://localhost:8888/odata/sample_data`
+
+Power Query M 코드 내용:
+```m
+section Section1;
+
+shared 쿼리1 = let
+    원본 = OData.Feed("http://localhost:8888/odata/sample_data", null, [Implementation="2.0"])
+in
+    원본;
+```
+
+이 URL은 `excel_connection_modifier.py`에 의해 실제 요청된 테이블의 URL로 동적 교체됨.
+
 ## 프로젝트 의존성
 
 주요 라이브러리 (pyproject.toml 참조):

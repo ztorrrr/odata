@@ -3,7 +3,13 @@
     "allow": [
       "Bash(uv run python run_server.py)",
       "Bash(rm:*)",
-      "Bash(uv run python:*)"
+      "Bash(uv run python:*)",
+      "Read(//private/tmp/**)",
+      "Read(//tmp/excel_template/customXml/**)",
+      "Bash(wget:*)",
+      "Bash(unzip:*)",
+      "Bash(curl:*)",
+      "Bash(cat:*)"
     ],
     "deny": [],
     "ask": []
