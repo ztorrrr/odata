@@ -8,10 +8,17 @@ BigQuery 데이터를 OData v4 REST API로 제공하는 서비스. Excel, Power 
 
 ## 아키텍처
 
-### 인증 흐름
+### GCP 인증 흐름
 - GCP service account 자격증명은 AWS Secret Manager에 저장
 - Secret key 형식: `{environment}/gen-ai/google/auth` (예: `dev/gen-ai/google/auth`)
 - `app/utils/gcp_auth.py`에서 AWS Secret Manager로부터 자격증명을 가져와 인증 설정
+
+### OData API 사용자 인증
+- HTTP Basic Authentication 사용 (Excel, Power BI 등과 호환)
+- 사용자 계정 정보는 AWS Secret Manager에 JSON 형식으로 저장
+- Secret key 형식: `{environment}/gen-ai/odata/users`
+- 데이터 조회 엔드포인트에만 인증 필요 (metadata는 인증 불필요)
+- FastAPI Dependency Injection으로 구현 (`app/utils/auth.py`)
 
 ### 데이터 흐름
 1. CSV 파일이 GCS bucket에 저장
@@ -80,6 +87,12 @@ BigQuery 데이터를 OData v4 REST API로 제공하는 서비스. Excel, Power 
 - `get_gcp_auth()`로 singleton 접근
 - BigQuery 및 Storage client 생성
 
+**app/utils/auth.py**: OData API 사용자 인증
+- HTTP Basic Authentication 구현
+- AWS Secret Manager에서 사용자 정보 로드
+- FastAPI Dependency로 제공 (`get_current_user()`)
+- 타이밍 공격 방지 (`secrets.compare_digest()` 사용)
+
 ## 주요 명령어
 
 ### 개발 환경 설정
@@ -133,6 +146,32 @@ BIGQUERY_TABLE_NAME=musinsa_data
 ```
 
 ## 구현 세부사항
+
+### API 인증
+HTTP Basic Authentication으로 구현:
+- **인증 필요 엔드포인트**: 데이터 조회, CSV export, Excel 생성
+- **인증 불필요 엔드포인트**: service document, metadata, health check
+
+AWS Secret Manager 설정:
+- Secret 이름: `dev/gen-ai/odata/users` (환경별로 다름)
+- JSON 형식:
+```json
+{
+  "users": [
+    {"username": "user1", "password": "pass1"},
+    {"username": "user2", "password": "pass2"}
+  ]
+}
+```
+
+Excel에서 사용:
+1. 데이터 > OData 피드 연결
+2. 인증 방식: "기본" (Basic) 선택
+3. 사용자명/암호 입력
+
+개발 환경:
+- Secret Manager에 사용자 정보가 없으면 인증 우회 (DEV 모드만)
+- 로그에 경고 메시지 출력
 
 ### 컬럼명 정제
 BigQuery 컬럼 명명 규칙 적용:
