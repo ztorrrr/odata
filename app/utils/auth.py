@@ -22,9 +22,7 @@ security = HTTPBasic()
 @cache
 def get_users_config():
     """
-    AWS Secret Manager에서 사용자 인증 정보를 가져옵니다.
-
-    Expected Secret format (JSON):
+    Secret format (JSON):
     {
         "users": [
             {
@@ -67,8 +65,6 @@ def get_users_config():
 
 def verify_credentials(username: str, password: str) -> bool:
     """
-    사용자 자격증명을 검증합니다.
-
     Args:
         username: 사용자명
         password: 평문 패스워드
@@ -101,9 +97,8 @@ async def get_current_user(
     credentials: HTTPBasicCredentials = Depends(security)
 ) -> str:
     """
-    현재 요청의 사용자를 인증하고 반환합니다.
-
-    FastAPI Dependency로 사용됩니다.
+    현재 요청의 사용자를 인증하고 반환.
+    FastAPI Dependency 사용.
 
     Args:
         credentials: HTTP Basic Auth 자격증명
