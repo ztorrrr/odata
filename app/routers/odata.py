@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Optional
 
 import pandas as pd
-from fastapi import APIRouter, BackgroundTasks, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
 from app.services.bigquery_service import get_bigquery_service
@@ -16,6 +16,7 @@ from app.services.odata_metadata import ODataMetadataGenerator
 from app.services.odata_query_parser import ODataQueryParser
 from app.services.excel_com_generator import create_excel_with_odata_com
 from app.utils.setting import get_config
+from app.utils.auth import get_current_user
 
 # 설정 및 로거
 config = get_config()
@@ -59,24 +60,9 @@ async def get_metadata():
     서비스의 데이터 모델을 XML 형식으로 반환합니다.
     """
     try:
-        bq_service = get_bigquery_service()
-
-        # BigQuery 스키마 가져오기
-        schema = bq_service.get_table_schema()
-        if not schema:
-            return Response(
-                content="<error>Table schema not found</error>",
-                media_type="application/xml",
-                status_code=404
-            )
-
         # OData 메타데이터 생성
         metadata_gen = ODataMetadataGenerator()
-        metadata_xml = metadata_gen.generate_metadata(
-            schema,
-            config.BIGQUERY_TABLE_NAME,
-            config.ODATA_SERVICE_NAME
-        )
+        metadata_xml = metadata_gen.generate_metadata()
 
         return Response(
             content=metadata_xml,
@@ -98,6 +84,7 @@ async def get_metadata():
 @router.get(f"/{config.BIGQUERY_TABLE_NAME}")
 async def get_entity_set(
     request: Request,
+    username: str = Depends(get_current_user),
     filter: Optional[str] = Query(None, alias="$filter", description="OData filter expression"),
     select: Optional[str] = Query(None, alias="$select", description="Comma-separated list of properties"),
     orderby: Optional[str] = Query(None, alias="$orderby", description="Order by expression"),
@@ -188,6 +175,7 @@ async def get_entity_set(
 
 @router.get(f"/{config.BIGQUERY_TABLE_NAME}/$count")
 async def get_count(
+    username: str = Depends(get_current_user),
     filter: Optional[str] = Query(None, alias="$filter", description="OData filter expression"),
 ):
     """
@@ -276,6 +264,7 @@ async def debug_routes():
 
 @router.get(f"/{config.BIGQUERY_TABLE_NAME}/export")
 async def export_to_csv(
+    username: str = Depends(get_current_user),
     filter: Optional[str] = Query(None, alias="$filter", description="OData filter expression"),
     select: Optional[str] = Query(None, alias="$select", description="Comma-separated list of properties"),
     orderby: Optional[str] = Query(None, alias="$orderby", description="Order by expression"),
@@ -343,6 +332,7 @@ async def export_to_csv(
 async def get_excel_with_com(
     request: Request,
     background_tasks: BackgroundTasks,
+    username: str = Depends(get_current_user),
     filter: Optional[str] = Query(None, alias="$filter", description="OData filter expression"),
     select: Optional[str] = Query(None, alias="$select", description="Comma-separated list of properties"),
     orderby: Optional[str] = Query(None, alias="$orderby", description="Order by expression"),

@@ -24,8 +24,11 @@ class BaseConfig:
 
     # AWS Secret Manager Keys
     # GCP 서비스 계정 키가 저장된 Secret Manager 키 dev/gen-ai/google/auth
-
     GCP_SERVICE_ACCOUNT_KEY: str = f"{ENVIRONMENT.lower()}/{SERVICE}/google/auth"
+
+    # OData 사용자 인증 정보가 저장된 Secret Manager 키
+    # Format: {"users": [{"username": "user1", "password": "pass1"}, ...]}
+    ODATA_USERS_SECRET_KEY: str = f"{ENVIRONMENT.lower()}/{SERVICE}/odata/users"
 
     # OData Configuration
     ODATA_SERVICE_NAME: str = "ODataService"
@@ -35,6 +38,9 @@ class BaseConfig:
     # Windows Excel Service (Optional - for COM-based Excel generation)
     WINDOWS_EXCEL_SERVICE_URL: str = os.getenv("WINDOWS_EXCEL_SERVICE_URL", "")
     WINDOWS_EXCEL_SERVICE_TIMEOUT: int = int(os.getenv("WINDOWS_EXCEL_SERVICE_TIMEOUT", "60"))
+
+    # CSV Export Configuration
+    CSV_MAX_ROWS: int = int(os.getenv("CSV_MAX_ROWS", "100000"))
 
 
 @dataclass

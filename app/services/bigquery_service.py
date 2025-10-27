@@ -200,45 +200,77 @@ class BigQueryService:
 
     def query_table(
         self,
-        select: Optional[List[str]] = None,
+        parser=None,
+        select: Optional[str] = None,
         filter: Optional[str] = None,
         orderby: Optional[str] = None,
         top: Optional[int] = None,
         skip: Optional[int] = None,
-    ) -> List[Dict[str, Any]]:
+        count: bool = False,
+        count_only: bool = False,
+    ) -> Dict[str, Any]:
         """
         테이블 쿼리 실행 (OData 파라미터 지원)
 
         Args:
-            select: 선택할 컬럼 리스트
-            filter: WHERE 조건
-            orderby: ORDER BY 조건
+            parser: OData 쿼리 파서 (filter, orderby 변환용)
+            select: 쉼표로 구분된 컬럼 목록 문자열
+            filter: OData filter 표현식
+            orderby: OData orderby 표현식
             top: LIMIT 값
             skip: OFFSET 값
+            count: 전체 개수 포함 여부
+            count_only: 개수만 반환 여부
 
         Returns:
-            쿼리 결과 리스트
+            {
+                'rows': List[Dict],
+                'row_count': int,
+                'total_count': int (count=True인 경우)
+            }
         """
         self.initialize()
 
         table_id = f"{self.gcp_auth.project_id}.{self.dataset_id}.{self.table_name}"
 
+        # count_only인 경우 개수만 반환
+        if count_only:
+            total = self.get_row_count(filter=self._parse_filter(parser, filter) if parser else filter)
+            return {
+                'total_count': total,
+                'row_count': 0,
+                'rows': []
+            }
+
         # SELECT 절 구성
         if select:
-            select_clause = ", ".join(f"`{col}`" for col in select)
+            # 쉼표로 구분된 문자열을 리스트로 변환
+            columns = [col.strip() for col in select.split(',')]
+            select_clause = ", ".join(f"`{col}`" for col in columns)
         else:
             select_clause = "*"
 
         # 기본 쿼리
         query = f"SELECT {select_clause} FROM `{table_id}`"
 
-        # WHERE 절
+        # WHERE 절 (parser를 통한 OData 필터 변환)
+        where_clause = None
         if filter:
-            query += f" WHERE {filter}"
+            if parser:
+                where_clause = parser.parse_filter(filter)
+            else:
+                where_clause = filter
 
-        # ORDER BY 절
+        if where_clause:
+            query += f" WHERE {where_clause}"
+
+        # ORDER BY 절 (parser를 통한 OData orderby 변환)
         if orderby:
-            query += f" ORDER BY {orderby}"
+            if parser:
+                orderby_clause = parser.parse_orderby(orderby)
+            else:
+                orderby_clause = orderby
+            query += f" ORDER BY {orderby_clause}"
 
         # LIMIT/OFFSET
         if top:
@@ -257,7 +289,37 @@ class BigQueryService:
         for row in results:
             rows.append(dict(row.items()))
 
-        return rows
+        result = {
+            'rows': rows,
+            'row_count': len(rows)
+        }
+
+        # count 요청 시 전체 개수 조회
+        if count:
+            total = self.get_row_count(filter=where_clause)
+            result['total_count'] = total
+
+        return result
+
+    def _parse_filter(self, parser, filter_str: Optional[str]) -> Optional[str]:
+        """
+        OData 필터를 SQL WHERE 절로 변환
+
+        Args:
+            parser: OData 쿼리 파서
+            filter_str: OData filter 표현식
+
+        Returns:
+            SQL WHERE 절
+        """
+        if not filter_str or not parser:
+            return filter_str
+
+        try:
+            return parser.parse_filter(filter_str)
+        except Exception as e:
+            logger.error(f"Error parsing filter: {e}")
+            return filter_str
 
     def get_row_count(self, filter: Optional[str] = None) -> int:
         """
