@@ -16,7 +16,7 @@ from app.services.odata_metadata import ODataMetadataGenerator
 from app.services.odata_query_parser import ODataQueryParser
 from app.services.excel_com_generator import create_excel_with_odata_com
 from app.utils.setting import get_config
-from app.utils.auth import get_current_user
+from app.utils.auth import get_current_user, get_current_user_with_header_token
 
 # 설정 및 로거
 config = get_config()
@@ -84,7 +84,7 @@ async def get_metadata():
 @router.get(f"/{config.BIGQUERY_TABLE_NAME}")
 async def get_entity_set(
     request: Request,
-    username: str = Depends(get_current_user),
+    username: str = Depends(get_current_user_with_header_token),
     filter: Optional[str] = Query(None, alias="$filter", description="OData filter expression"),
     select: Optional[str] = Query(None, alias="$select", description="Comma-separated list of properties"),
     orderby: Optional[str] = Query(None, alias="$orderby", description="Order by expression"),
@@ -175,7 +175,8 @@ async def get_entity_set(
 
 @router.get(f"/{config.BIGQUERY_TABLE_NAME}/$count")
 async def get_count(
-    username: str = Depends(get_current_user),
+    request: Request,
+    username: str = Depends(get_current_user_with_header_token),
     filter: Optional[str] = Query(None, alias="$filter", description="OData filter expression"),
 ):
     """
@@ -264,7 +265,8 @@ async def debug_routes():
 
 @router.get(f"/{config.BIGQUERY_TABLE_NAME}/export")
 async def export_to_csv(
-    username: str = Depends(get_current_user),
+    request: Request,
+    username: str = Depends(get_current_user_with_header_token),
     filter: Optional[str] = Query(None, alias="$filter", description="OData filter expression"),
     select: Optional[str] = Query(None, alias="$select", description="Comma-separated list of properties"),
     orderby: Optional[str] = Query(None, alias="$orderby", description="Order by expression"),
@@ -317,6 +319,111 @@ async def export_to_csv(
 
     except Exception as e:
         logger.error(f"Error exporting to CSV: {str(e)}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {
+                    "code": "InternalServerError",
+                    "message": str(e)
+                }
+            }
+        )
+
+
+@router.get(f"/{config.BIGQUERY_TABLE_NAME}/excel-com-webapi-key")
+async def get_excel_with_webapi_auth(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    filter: Optional[str] = Query(None, alias="$filter", description="OData filter expression"),
+    select: Optional[str] = Query(None, alias="$select", description="Comma-separated list of properties"),
+    orderby: Optional[str] = Query(None, alias="$orderby", description="Order by expression"),
+    table_name: Optional[str] = Query("Data", description="Excel table name"),
+    api_key_name: Optional[str] = Query("Authorization", description="API Key name for Web API auth")
+):
+    """
+    Windows COM을 사용한 Excel 파일 생성 (Web API 인증 템플릿)
+
+    Web API 인증 방식을 사용하는 Excel 템플릿 파일을 생성합니다.
+    이 엔드포인트는 인증 없이 접근 가능합니다 (템플릿 다운로드용).
+
+    실제 데이터 보안:
+    - 다운로드된 Excel 파일에는 데이터가 없음 (템플릿만 제공)
+    - Excel에서 데이터 새로고침 시 Web API 키 입력 필요
+    - 실제 데이터는 인증 후에만 접근 가능
+
+    Excel에서 인증 방법:
+    - 데이터 새로고침 시 "웹 API" 탭 선택
+    - 키 입력란에 "Bearer <your_api_token>" 형식으로 입력
+    - 예: Bearer tok_abc123xyz
+
+    특징:
+    - Windows 환경에서만 작동
+    - Excel이 설치되어 있어야 함
+    - Web API 인증 설정이 포함된 Excel 템플릿 생성
+
+    지원하는 파라미터:
+    - $filter: 필터 조건 (예: Media eq 'Naver')
+    - $select: 선택할 필드 (예: Date,Campaign,Clicks)
+    - $orderby: 정렬 조건 (예: Date desc)
+    - table_name: Excel 테이블 이름 (기본: Data)
+    - api_key_name: API 키 이름 (기본: Authorization)
+    """
+    try:
+        from app.services.excel_com_generator import create_excel_with_webapi_auth_com
+
+        # OData URL 구성
+        base_url = str(request.base_url).rstrip('/')
+        odata_url = f"{base_url}/odata/{config.BIGQUERY_TABLE_NAME}"
+
+        # 쿼리 파라미터 추가
+        query_params = []
+        if filter:
+            query_params.append(f"$filter={filter}")
+        if select:
+            query_params.append(f"$select={select}")
+        if orderby:
+            query_params.append(f"$orderby={orderby}")
+
+        if query_params:
+            odata_url += "?" + "&".join(query_params)
+
+        # Web API 인증을 사용하여 Excel 파일 생성
+        output_path = create_excel_with_webapi_auth_com(
+            odata_url=odata_url,
+            table_name=table_name,
+            api_key_name=api_key_name,
+            skip_data_load=True  # 인증 필요하므로 데이터 로드 건너뜀
+        )
+
+        # 파일명 생성
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{config.BIGQUERY_TABLE_NAME}_webapi_{timestamp}.xlsx"
+
+        # 임시 파일 삭제 작업을 background task로 추가
+        background_tasks.add_task(os.unlink, output_path)
+
+        # FileResponse로 반환
+        return FileResponse(
+            path=output_path,
+            filename=filename,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+    except ImportError as e:
+        logger.error(f"pywin32 not installed or not available on this platform: {e}")
+        return JSONResponse(
+            status_code=501,
+            content={
+                "error": {
+                    "code": "NotImplemented",
+                    "message": "Windows COM support is not available. This endpoint requires Windows with Excel installed.",
+                    "details": str(e)
+                }
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error generating Excel with Web API auth: {str(e)}", exc_info=True)
         return JSONResponse(
             status_code=500,
             content={
