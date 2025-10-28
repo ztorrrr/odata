@@ -439,22 +439,31 @@ async def get_excel_with_webapi_auth(
 async def get_excel_with_com(
     request: Request,
     background_tasks: BackgroundTasks,
-    username: str = Depends(get_current_user),
     filter: Optional[str] = Query(None, alias="$filter", description="OData filter expression"),
     select: Optional[str] = Query(None, alias="$select", description="Comma-separated list of properties"),
     orderby: Optional[str] = Query(None, alias="$orderby", description="Order by expression"),
     table_name: Optional[str] = Query("Data", description="Excel table name")
 ):
     """
-    Windows COM을 사용한 Excel 파일 생성 (OData 연결 포함)
+    Windows COM을 사용한 Excel 파일 생성 (Basic Auth 템플릿)
 
-    Windows COM 자동화를 통해 실제 Excel 인스턴스에서 파일을 생성합니다.
-    OData 연결 정보가 포함된 Excel 파일을 생성합니다.
+    HTTP Basic Authentication (ID/PW) 방식을 사용하는 Excel 템플릿 파일을 생성합니다.
+    이 엔드포인트는 인증 없이 접근 가능합니다 (템플릿 다운로드용).
+
+    실제 데이터 보안:
+    - 다운로드된 Excel 파일에는 데이터가 없음 (템플릿만 제공)
+    - Excel에서 데이터 새로고침 시 "기본" 탭에서 ID/PW 입력 필요
+    - 실제 데이터는 인증 후에만 접근 가능
+
+    Excel에서 인증 방법:
+    - 데이터 새로고침 시 "기본" 탭 선택
+    - 사용자명과 비밀번호 입력
+    - Basic Auth로 서버에 인증
 
     특징:
     - Windows 환경에서만 작동
     - Excel이 설치되어 있어야 함
-    - OData 연결 정보가 포함됨
+    - Basic Auth 방식의 OData 연결 템플릿 생성
 
     지원하는 파라미터:
     - $filter: 필터 조건 (예: Media eq 'Naver')
