@@ -16,7 +16,8 @@
       "Bash(timeout /t 3)",
       "Bash(python:*)",
       "Bash(powershell \"Get-Item app\\routers\\odata.py | Select-Object LastWriteTime, Length\")",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(powershell \"Get-Process | Where-Object {$_ProcessName -like ''*python*'' -and $_CommandLine -like ''*main.py*''} | Select-Object Id, ProcessName, StartTime | Format-Table\")"
     ],
     "deny": [],
     "ask": []

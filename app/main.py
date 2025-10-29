@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.routers import odata
+from app.routers import odata, spreadsheet
 from app.utils.setting import get_config, setup_gcp_auth
 from app.services.bigquery_service import get_bigquery_service
 
@@ -84,6 +84,7 @@ app.add_middleware(
 
 # 라우터 등록
 app.include_router(odata.router)
+app.include_router(spreadsheet.router)
 
 
 @app.get("/")
@@ -96,6 +97,7 @@ async def root():
         "version": config.ODATA_SERVICE_VERSION,
         "odata_endpoint": "/odata",
         "metadata": "/odata/$metadata",
+        "spreadsheet_endpoint": "/spreadsheet",
         "health": "/odata/health",
         "documentation": config.DOCS_URL if config.DOCS_URL else "disabled"
     }
