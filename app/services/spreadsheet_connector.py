@@ -5,6 +5,8 @@ import logging
 from typing import Dict, Optional, Any, List
 from google.cloud import bigquery
 from google.cloud.exceptions import NotFound
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from app.utils.gcp_auth import get_gcp_auth
 from app.utils.setting import get_config
 from app.services.bigquery_service import get_bigquery_service
@@ -20,6 +22,9 @@ class SpreadsheetConnector:
         self.gcp_auth = get_gcp_auth()
         self.bq_service = get_bigquery_service()
         self.client = None
+        self.sheets_service = None
+        self.drive_service = None
+        self.script_service = None
 
     def initialize(self):
         """BigQuery 클라이언트 초기화"""
@@ -97,109 +102,6 @@ class SpreadsheetConnector:
         logger.info(f"Created view: {view_id} with {sample_size} sample rows")
 
         return view_id
-
-    def get_connected_sheets_config(
-        self,
-        view_id: str = None,
-        spreadsheet_id: str = None
-    ) -> Dict[str, Any]:
-        """
-        Connected Sheets 연결에 필요한 설정 정보 반환
-
-        Args:
-            view_id: BigQuery View ID
-            spreadsheet_id: Google Spreadsheet ID
-
-        Returns:
-            Connected Sheets 설정 정보
-        """
-        self.initialize()
-
-        if view_id is None:
-            # 기본 샘플 view 이름 사용
-            view_name = f"{self.config.BIGQUERY_TABLE_NAME}_sample_100"
-            view_id = (
-                f"{self.gcp_auth.project_id}."
-                f"{self.config.BIGQUERY_DATASET_ID}."
-                f"{view_name}"
-            )
-
-        # View ID 파싱
-        parts = view_id.split('.')
-        project_id = parts[0] if len(parts) > 0 else self.gcp_auth.project_id
-        dataset_id = parts[1] if len(parts) > 1 else self.config.BIGQUERY_DATASET_ID
-        table_name = parts[2] if len(parts) > 2 else view_id
-
-        config = {
-            "bigquery": {
-                "projectId": project_id,
-                "datasetId": dataset_id,
-                "tableId": table_name,
-                "viewId": view_id
-            },
-            "connection_info": {
-                "type": "BigQuery Connected Sheet",
-                "refresh": "On-demand or scheduled",
-                "authentication": "Service Account (automated) or User OAuth (manual)"
-            }
-        }
-
-        if spreadsheet_id:
-            config["spreadsheet"] = {
-                "id": spreadsheet_id,
-                "url": f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}"
-            }
-
-        # Connected Sheets를 위한 SQL 쿼리 (옵션)
-        config["query"] = f"SELECT * FROM `{view_id}`"
-
-        return config
-
-    def create_data_source_for_sheet(
-        self,
-        spreadsheet_id: str,
-        view_id: str = None
-    ) -> Dict[str, Any]:
-        """
-        스프레드시트에 BigQuery 데이터 소스 설정 가이드 제공
-
-        Note: Google Sheets API로는 Connected Sheets를 직접 생성할 수 없으므로
-        사용자가 UI에서 설정할 수 있도록 가이드 제공
-
-        Args:
-            spreadsheet_id: Google Spreadsheet ID
-            view_id: BigQuery View ID
-
-        Returns:
-            설정 가이드 및 정보
-        """
-        config = self.get_connected_sheets_config(view_id, spreadsheet_id)
-
-        guide = {
-            "manual_setup_steps": [
-                "1. Open the spreadsheet in Google Sheets",
-                "2. Go to Data > Data connectors > Connect to BigQuery",
-                "3. Select your Google Cloud project",
-                f"4. Browse to dataset: {config['bigquery']['datasetId']}",
-                f"5. Select table/view: {config['bigquery']['tableId']}",
-                "6. Click 'Connect' to establish the connection",
-                "7. Choose columns to import (or select all)",
-                "8. Set refresh schedule if needed"
-            ],
-            "connection_config": config,
-            "spreadsheet_url": f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}",
-            "alternative_method": {
-                "description": "Use BigQuery SQL query in Sheets",
-                "steps": [
-                    "1. In Google Sheets, go to Data > Data connectors > Connect to BigQuery",
-                    "2. Choose 'Custom query' option",
-                    f"3. Paste this query: {config['query']}",
-                    "4. Click 'Connect'"
-                ]
-            }
-        }
-
-        return guide
 
     def get_sample_data(
         self,
@@ -358,6 +260,384 @@ class SpreadsheetConnector:
         except Exception as e:
             logger.error(f"Failed to restore view: {e}")
             raise
+
+    def _get_sheets_service(self):
+        """Google Sheets API 서비스 클라이언트 반환"""
+        if not self.sheets_service:
+            self.initialize()
+            self.sheets_service = build('sheets', 'v4', credentials=self.gcp_auth.credentials)
+        return self.sheets_service
+
+    def _get_drive_service(self):
+        """Google Drive API 서비스 클라이언트 반환"""
+        if not self.drive_service:
+            self.initialize()
+            self.drive_service = build('drive', 'v3', credentials=self.gcp_auth.credentials)
+        return self.drive_service
+
+    def _get_script_service(self):
+        """Google Apps Script API 서비스 클라이언트 반환"""
+        if not self.script_service:
+            self.initialize()
+            self.script_service = build('script', 'v1', credentials=self.gcp_auth.credentials)
+        return self.script_service
+
+    def _find_folder_by_name(self, folder_name: str) -> Optional[str]:
+        """
+        폴더 이름으로 Google Drive 폴더 ID 검색
+
+        Args:
+            folder_name: 검색할 폴더 이름
+
+        Returns:
+            폴더 ID (찾지 못하면 None)
+        """
+        drive_service = self._get_drive_service()
+
+        # 루트 폴더에서 검색
+        query = f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+
+        try:
+            results = drive_service.files().list(
+                q=query,
+                spaces='drive',
+                fields='files(id, name)',
+                pageSize=10
+            ).execute()
+
+            files = results.get('files', [])
+
+            if files:
+                folder_id = files[0]['id']
+                logger.info(f"Found folder '{folder_name}': {folder_id}")
+                return folder_id
+            else:
+                logger.warning(f"Folder '{folder_name}' not found")
+                return None
+
+        except HttpError as e:
+            logger.error(f"Error searching for folder: {e}")
+            return None
+
+    def _move_to_folder(self, spreadsheet_id: str, folder_id: str):
+        """스프레드시트를 특정 폴더로 이동"""
+        drive_service = self._get_drive_service()
+
+        # 현재 부모 폴더 가져오기
+        file = drive_service.files().get(
+            fileId=spreadsheet_id,
+            fields='parents'
+        ).execute()
+
+        previous_parents = ",".join(file.get('parents', []))
+
+        # 새 폴더로 이동
+        drive_service.files().update(
+            fileId=spreadsheet_id,
+            addParents=folder_id,
+            removeParents=previous_parents,
+            fields='id, parents'
+        ).execute()
+
+    def create_spreadsheet_with_connected_bigquery(
+        self,
+        spreadsheet_title: str = None,
+        view_id: str = None,
+        folder_id: str = None,
+        folder_name: str = "odata_test"
+    ) -> Dict[str, Any]:
+        """
+        BigQuery Connected Sheets를 생성 (네이티브 연결)
+
+        이 방식은 Apps Script 없이도 BigQuery 데이터를 직접 조회하고
+        새로고침할 수 있는 네이티브 연결을 생성합니다.
+
+        Args:
+            spreadsheet_title: 생성할 스프레드시트 이름 (None이면 자동 생성: bigquery_connector_YYMMDD_HHMMSS)
+            view_id: BigQuery View ID (None이면 기본 샘플 view 사용)
+            folder_id: Google Drive 폴더 ID (None이면 folder_name으로 검색)
+            folder_name: 폴더 이름 (folder_id가 None일 때 검색, 기본값: "odata_test")
+
+        Returns:
+            생성된 스프레드시트 정보
+        """
+        try:
+            self.initialize()
+
+            # 스프레드시트 제목 자동 생성
+            if spreadsheet_title is None:
+                from datetime import datetime
+                timestamp = datetime.now().strftime("%y%m%d_%H%M%S")
+                spreadsheet_title = f"bigquery_connector_{timestamp}"
+                logger.info(f"Auto-generated spreadsheet title: {spreadsheet_title}")
+
+            # 폴더 ID 자동 검색
+            if folder_id is None and folder_name:
+                folder_id = self._find_folder_by_name(folder_name)
+                if folder_id:
+                    logger.info(f"Using folder '{folder_name}' (ID: {folder_id})")
+                else:
+                    logger.warning(f"Folder '{folder_name}' not found, creating in root")
+
+            # View ID 설정
+            if view_id is None:
+                view_name = f"{self.config.BIGQUERY_TABLE_NAME}_sample_100"
+                view_id = (
+                    f"{self.gcp_auth.project_id}."
+                    f"{self.config.BIGQUERY_DATASET_ID}."
+                    f"{view_name}"
+                )
+
+            # View ID 파싱
+            parts = view_id.split('.')
+            project_id = parts[0] if len(parts) > 0 else self.gcp_auth.project_id
+            dataset_id = parts[1] if len(parts) > 1 else self.config.BIGQUERY_DATASET_ID
+            table_id = parts[2] if len(parts) > 2 else view_id
+
+            logger.info(f"Creating Connected Sheets '{spreadsheet_title}' with BigQuery view: {view_id}")
+
+            # 1. 빈 스프레드시트 생성
+            sheets_service = self._get_sheets_service()
+            spreadsheet_body = {
+                'properties': {
+                    'title': spreadsheet_title
+                }
+            }
+
+            spreadsheet = sheets_service.spreadsheets().create(
+                body=spreadsheet_body
+            ).execute()
+
+            spreadsheet_id = spreadsheet['spreadsheetId']
+            spreadsheet_url = spreadsheet['spreadsheetUrl']
+
+            logger.info(f"Created spreadsheet: {spreadsheet_url}")
+
+            # 2. 폴더로 이동 (folder_id가 제공된 경우)
+            if folder_id:
+                self._move_to_folder(spreadsheet_id, folder_id)
+                logger.info(f"Moved spreadsheet to folder: {folder_id}")
+
+            # 3. BigQuery Data Source 추가
+            data_source_response = self._create_bigquery_data_source(
+                spreadsheet_id,
+                project_id,
+                dataset_id,
+                table_id
+            )
+
+            data_source_id = data_source_response['dataSource']['dataSourceId']
+            logger.info(f"Created BigQuery data source: {data_source_id}")
+
+            # 4. 기본 빈 시트 제거 및 데이터 소스 시트를 첫 번째로 이동
+            # (데이터 소스 실행 완료를 기다리지 않고 바로 cleanup)
+            self._cleanup_default_sheet(spreadsheet_id)
+            logger.info(f"Cleaned up default sheet")
+
+            # 5. 데이터 소스 실행 완료 대기 (백그라운드)
+            # 참고: 데이터 소스는 백그라운드에서 실행되며,
+            # 스프레드시트를 열면 자동으로 데이터가 로드됩니다.
+            execution_status = "RUNNING"
+            logger.info(f"Data source execution started in background")
+
+            return {
+                "success": True,
+                "status": "CREATED",
+                "spreadsheet": {
+                    "id": spreadsheet_id,
+                    "url": spreadsheet_url,
+                    "title": spreadsheet_title
+                },
+                "bigquery": {
+                    "view_id": view_id,
+                    "data_source_id": data_source_id,
+                    "project_id": project_id,
+                    "dataset_id": dataset_id,
+                    "table_id": table_id
+                },
+                "folder": {
+                    "id": folder_id,
+                    "name": folder_name if folder_id else None
+                },
+                "connected_sheets": True,
+                "message": f"✓ SUCCESS: BigQuery Connected Sheets created successfully!",
+                "instructions": [
+                    f"1. Open spreadsheet: {spreadsheet_url}",
+                    "2. Data is connected to BigQuery and ready to use",
+                    "3. Refresh data: Data > Data sources > Refresh",
+                    "4. The spreadsheet will automatically load the latest BigQuery data"
+                ]
+            }
+
+        except HttpError as e:
+            logger.error(f"Google API error: {e}")
+            raise Exception(f"Failed to create Connected Sheets: {e}")
+        except Exception as e:
+            logger.error(f"Error creating Connected Sheets: {e}")
+            raise
+
+    def _create_bigquery_data_source(
+        self,
+        spreadsheet_id: str,
+        project_id: str,
+        dataset_id: str,
+        table_id: str
+    ) -> Dict[str, Any]:
+        """
+        BigQuery 데이터 소스를 스프레드시트에 추가
+
+        Args:
+            spreadsheet_id: 스프레드시트 ID
+            project_id: BigQuery 프로젝트 ID
+            dataset_id: BigQuery 데이터셋 ID
+            table_id: BigQuery 테이블/뷰 ID
+
+        Returns:
+            AddDataSourceResponse
+        """
+        sheets_service = self._get_sheets_service()
+
+        requests = [{
+            'addDataSource': {
+                'dataSource': {
+                    'spec': {
+                        'bigQuery': {
+                            'projectId': project_id,
+                            'tableSpec': {
+                                'tableProjectId': project_id,
+                                'datasetId': dataset_id,
+                                'tableId': table_id
+                            }
+                        }
+                    }
+                }
+            }
+        }]
+
+        body = {
+            'requests': requests
+        }
+
+        response = sheets_service.spreadsheets().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body=body
+        ).execute()
+
+        # AddDataSourceResponse 반환
+        return response['replies'][0]['addDataSource']
+
+    def _wait_for_data_source(
+        self,
+        spreadsheet_id: str,
+        data_source_id: str,
+        max_wait_seconds: int = 60
+    ) -> str:
+        """
+        데이터 소스 실행 완료 대기 (polling)
+
+        Args:
+            spreadsheet_id: 스프레드시트 ID
+            data_source_id: 데이터 소스 ID
+            max_wait_seconds: 최대 대기 시간 (초)
+
+        Returns:
+            최종 실행 상태 ('SUCCEEDED' or 'FAILED')
+        """
+        import time
+
+        sheets_service = self._get_sheets_service()
+        start_time = time.time()
+
+        while True:
+            # 스프레드시트 정보 가져오기
+            spreadsheet = sheets_service.spreadsheets().get(
+                spreadsheetId=spreadsheet_id,
+                includeGridData=False
+            ).execute()
+
+            # 데이터 소스 찾기
+            data_sources = spreadsheet.get('dataSources', [])
+            for ds in data_sources:
+                if ds.get('dataSourceId') == data_source_id:
+                    status = ds.get('dataExecution Status', {}).get('state', 'UNKNOWN')
+
+                    if status in ['SUCCEEDED', 'FAILED']:
+                        return status
+
+            # 타임아웃 체크
+            if time.time() - start_time > max_wait_seconds:
+                logger.warning(f"Data source execution timeout after {max_wait_seconds}s")
+                return 'TIMEOUT'
+
+            # 잠시 대기 후 재시도
+            time.sleep(2)
+
+    def _cleanup_default_sheet(self, spreadsheet_id: str):
+        """
+        기본 빈 시트를 제거하고 데이터 소스 시트만 남김
+
+        Args:
+            spreadsheet_id: 스프레드시트 ID
+        """
+        sheets_service = self._get_sheets_service()
+
+        # 스프레드시트 정보 가져오기
+        spreadsheet = sheets_service.spreadsheets().get(
+            spreadsheetId=spreadsheet_id
+        ).execute()
+
+        sheets = spreadsheet.get('sheets', [])
+
+        # 데이터 소스가 연결되지 않은 빈 시트 찾기
+        default_sheets = []
+        data_source_sheets = []
+
+        for sheet in sheets:
+            sheet_id = sheet['properties']['sheetId']
+            sheet_title = sheet['properties']['title']
+
+            # 데이터 소스가 연결된 시트인지 확인
+            has_data_source = 'dataSourceSheetProperties' in sheet.get('properties', {})
+
+            if has_data_source:
+                data_source_sheets.append((sheet_id, sheet_title))
+            else:
+                default_sheets.append((sheet_id, sheet_title))
+
+        # 데이터 소스 시트가 있고, 기본 시트가 있으면 기본 시트 삭제
+        if data_source_sheets and default_sheets:
+            requests = []
+
+            # 기본 시트 삭제 요청
+            for sheet_id, sheet_title in default_sheets:
+                requests.append({
+                    'deleteSheet': {
+                        'sheetId': sheet_id
+                    }
+                })
+                logger.info(f"Deleting default sheet: {sheet_title} (ID: {sheet_id})")
+
+            # 데이터 소스 시트를 첫 번째로 이동
+            if data_source_sheets:
+                first_data_source_id = data_source_sheets[0][0]
+                requests.append({
+                    'updateSheetProperties': {
+                        'properties': {
+                            'sheetId': first_data_source_id,
+                            'index': 0
+                        },
+                        'fields': 'index'
+                    }
+                })
+                logger.info(f"Moving data source sheet to first position")
+
+            # 요청 실행
+            if requests:
+                body = {'requests': requests}
+                sheets_service.spreadsheets().batchUpdate(
+                    spreadsheetId=spreadsheet_id,
+                    body=body
+                ).execute()
 
 
 # 싱글톤 인스턴스

@@ -86,11 +86,22 @@ def get_gcp_service_account_key():
 def setup_gcp_auth():
     """
     GCP 인증을 설정합니다.
-    AWS Secret Manager에서 서비스 계정 키를 가져와 설정합니다.
+    1. Application Default Credentials (ADC) 우선 시도
+    2. 실패 시 AWS Secret Manager에서 서비스 계정 키를 가져와 설정
     """
+    import logging
     from app.utils.gcp_auth import get_gcp_auth
 
+    logger = logging.getLogger(__name__)
     gcp_auth = get_gcp_auth()
+
+    # 1. ADC로 인증 시도
+    if gcp_auth.authenticate_with_adc():
+        logger.info(f"Authenticated with Application Default Credentials (project: {gcp_auth.project_id})")
+        return gcp_auth
+
+    # 2. ADC 실패 시 AWS Secret Manager 사용
+    logger.info("ADC not available, using service account from AWS Secret Manager")
     gcp_auth.authenticate_from_secret(get_config().GCP_SERVICE_ACCOUNT_KEY)
 
     return gcp_auth

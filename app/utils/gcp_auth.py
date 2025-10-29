@@ -9,6 +9,8 @@ from typing import Optional
 
 from google.oauth2 import service_account
 from google.cloud import bigquery, storage
+from google.auth import default
+from google.auth.exceptions import DefaultCredentialsError
 
 from app.utils import aws_secret_manager as secret_manager
 
@@ -20,6 +22,7 @@ class GCPAuth:
         self.credentials = None
         self.project_id = None
         self.service_account_info = None
+        self._initialized = False
 
     def authenticate_from_secret(self, secret_key: str) -> None:
         """
@@ -53,6 +56,9 @@ class GCPAuth:
                 "https://www.googleapis.com/auth/cloud-platform",
                 "https://www.googleapis.com/auth/bigquery",
                 "https://www.googleapis.com/auth/devstorage.read_only",
+                "https://www.googleapis.com/auth/spreadsheets",
+                "https://www.googleapis.com/auth/drive",
+                "https://www.googleapis.com/auth/script.projects",
             ]
         )
 
@@ -127,6 +133,39 @@ class GCPAuth:
         else:
             # 환경변수 기반 인증 사용
             return storage.Client()
+
+    def authenticate_with_adc(self) -> bool:
+        """
+        Application Default Credentials (ADC)로 인증을 시도합니다.
+
+        Returns:
+            인증 성공 여부
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        try:
+            credentials, project = default(scopes=[
+                "https://www.googleapis.com/auth/cloud-platform",
+                "https://www.googleapis.com/auth/bigquery",
+                "https://www.googleapis.com/auth/devstorage.read_only",
+                "https://www.googleapis.com/auth/spreadsheets",
+                "https://www.googleapis.com/auth/drive",
+                "https://www.googleapis.com/auth/script.projects",
+            ])
+
+            self.credentials = credentials
+            self.project_id = project or os.environ.get("GOOGLE_CLOUD_PROJECT")
+            self._initialized = True
+
+            logger.info(f"ADC authentication successful. Project: {self.project_id}")
+            return True
+        except DefaultCredentialsError as e:
+            logger.warning(f"ADC not available: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error during ADC authentication: {e}", exc_info=True)
+            return False
 
 
 # 싱글톤 인스턴스

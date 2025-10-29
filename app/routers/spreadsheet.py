@@ -51,50 +51,6 @@ async def create_sample_view(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/connection-config")
-async def get_connection_config(
-    spreadsheet_id: str = Query(..., description="Google Spreadsheet ID"),
-    view_id: Optional[str] = Query(None, description="BigQuery View ID"),
-    current_user: str = Depends(get_current_user_with_header_token)
-):
-    """
-    스프레드시트와 BigQuery 연동 설정 정보 반환
-    """
-    try:
-        connector = get_spreadsheet_connector()
-        config = connector.get_connected_sheets_config(
-            view_id=view_id,
-            spreadsheet_id=spreadsheet_id
-        )
-
-        return JSONResponse(content=config)
-    except Exception as e:
-        logger.error(f"Error getting connection config: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/setup-guide")
-async def get_setup_guide(
-    spreadsheet_id: str = Query(..., description="Google Spreadsheet ID"),
-    view_id: Optional[str] = Query(None, description="BigQuery View ID"),
-    current_user: str = Depends(get_current_user_with_header_token)
-):
-    """
-    Connected Sheets 설정 가이드 제공
-    """
-    try:
-        connector = get_spreadsheet_connector()
-        guide = connector.create_data_source_for_sheet(
-            spreadsheet_id=spreadsheet_id,
-            view_id=view_id
-        )
-
-        return JSONResponse(content=guide)
-    except Exception as e:
-        logger.error(f"Error getting setup guide: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @router.get("/sample-data")
 async def get_sample_data(
     view_id: Optional[str] = Query(None, description="BigQuery View ID"),
@@ -193,47 +149,40 @@ async def restore_original_view(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/setup-spreadsheet/{spreadsheet_id}")
-async def setup_spreadsheet_connection(
-    spreadsheet_id: str,
-    sample_size: int = Query(100, description="Number of sample rows"),
-    source_table: Optional[str] = Query(None, description="Source table name"),
+@router.api_route("/create-connected-bigquery", methods=["GET", "POST"])
+async def create_connected_bigquery_spreadsheet(
+    title: Optional[str] = Query(None, description="Spreadsheet title (auto-generated if not provided: bigquery_connector_YYMMDD_HHMMSS)"),
+    view_id: Optional[str] = Query(None, description="BigQuery View ID"),
+    folder_id: Optional[str] = Query(None, description="Google Drive folder ID"),
+    folder_name: str = Query("odata_test", description="Folder name to search (used if folder_id is not provided)"),
     current_user: str = Depends(get_current_user_with_header_token)
 ):
     """
-    스프레드시트 연동을 위한 전체 설정 프로세스
-    1. 샘플 View 생성
-    2. 연동 가이드 제공
+    BigQuery Connected Sheets를 생성 (네이티브 연결)
+
+    이 방식은 Apps Script 없이도 BigQuery 데이터를 직접 조회하고
+    새로고침할 수 있는 네이티브 연결을 생성합니다.
+
+    특징:
+    - Google Sheets의 네이티브 Connected Sheets 기능 사용
+    - 스프레드시트 UI에서 직접 데이터 새로고침 가능
+    - 수동 설정 없이 즉시 사용 가능
+    - Apps Script 설정 불필요
+    - 파일명 자동 생성 (timestamp 포함)
+    - "odata_test" 폴더에 자동 저장
     """
     try:
         connector = get_spreadsheet_connector()
 
-        # 1. 샘플 View 생성
-        view_id = connector.create_sample_view(
-            source_table=source_table,
-            sample_size=sample_size,
-            force_recreate=False
+        result = connector.create_spreadsheet_with_connected_bigquery(
+            spreadsheet_title=title,
+            view_id=view_id,
+            folder_id=folder_id,
+            folder_name=folder_name
         )
 
-        # 2. 연동 가이드 생성
-        guide = connector.create_data_source_for_sheet(
-            spreadsheet_id=spreadsheet_id,
-            view_id=view_id
-        )
+        return JSONResponse(content=result)
 
-        # 3. 샘플 데이터 미리보기 (5개 행)
-        sample_data = connector.get_sample_data(view_id=view_id, limit=5)
-
-        return JSONResponse(
-            content={
-                "success": True,
-                "view_id": view_id,
-                "sample_size": sample_size,
-                "setup_guide": guide,
-                "data_preview": sample_data,
-                "message": "Sample view created. Follow the setup guide to connect to your spreadsheet."
-            }
-        )
     except Exception as e:
-        logger.error(f"Error setting up spreadsheet connection: {e}")
+        logger.error(f"Error creating Connected Sheets with BigQuery: {e}")
         raise HTTPException(status_code=500, detail=str(e))

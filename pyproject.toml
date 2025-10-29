@@ -9,6 +9,10 @@ dependencies = [
     "cachetools>=6.2.1",
     "defusedxml>=0.7.1",
     "fastapi>=0.119.0",
+    "google-api-python-client>=2.149.0",
+    "google-auth>=2.35.0",
+    "google-auth-httplib2>=0.2.0",
+    "google-auth-oauthlib>=1.2.1",
     "google-cloud-bigquery>=3.38.0",
     "google-cloud-secret-manager>=2.25.0",
     "google-cloud-storage>=3.4.1",
@@ -19,6 +23,7 @@ dependencies = [
     "pydantic>=2.12.3",
     "python-dotenv>=1.1.1",
     "python-multipart>=0.0.20",
+    "pywin32>=311",
     "uvicorn>=0.38.0",
 ]
 
