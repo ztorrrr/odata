@@ -7,7 +7,7 @@
   <Principals>
     <Principal id="Author">
       <UserId>S-1-5-21-1917569513-178915861-4047879654-1001</UserId>
-      <LogonType>Password</LogonType>
+      <LogonType>InteractiveToken</LogonType>
       <RunLevel>HighestAvailable</RunLevel>
     </Principal>
   </Principals>
@@ -29,10 +29,10 @@
     <UseUnifiedSchedulingEngine>true</UseUnifiedSchedulingEngine>
   </Settings>
   <Triggers>
-    <BootTrigger>
+    <LogonTrigger>
       <Enabled>true</Enabled>
       <Delay>PT30S</Delay>
-    </BootTrigger>
+    </LogonTrigger>
   </Triggers>
   <Actions Context="Author">
     <Exec>
